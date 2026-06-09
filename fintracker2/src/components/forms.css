@@ -1,0 +1,15 @@
+/* Shared form input style — injected globally */
+.fi {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  font-family: inherit;
+  width: 100%;
+}
+.fi:focus { border-color: var(--teal); }
+
+.spin { animation: spin .7s linear infinite; }
