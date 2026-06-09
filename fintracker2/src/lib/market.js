@@ -78,8 +78,8 @@ export async function fetchFXRates(currencies) {
     try {
       const symbol = `${currency}=X`;
       const result = await fetchYahoo(symbol);
-      // Yahoo returns how many USD per 1 unit of foreign currency
-      rates[currency] = result.value;
+      // Yahoo BRL=X, KRW=X returns units of foreign currency per 1 USD — invert it
+      rates[currency] = 1 / result.value;
     } catch {
       rates[currency] = null;
     }
