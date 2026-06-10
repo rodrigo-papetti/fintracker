@@ -73,35 +73,51 @@ export async function fetchCoinGecko(coinId) {
 // --- FX rates for portfolio conversion ---
 export async function fetchFXRates(currencies) {
   const rates = { USD: 1 };
-  for (const currency of currencies) {
-    if (currency === 'USD') continue;
+  const nonUSD = currencies.filter(c => c !== 'USD');
+  if (!nonUSD.length) return rates;
+
+  // Fetch all FX rates in parallel
+  await Promise.all(nonUSD.map(async currency => {
     try {
-      const symbol = `${currency}=X`;
-      const result = await fetchYahoo(symbol);
-      // Yahoo BRL=X, KRW=X returns units of foreign currency per 1 USD — invert it
+      const result = await fetchYahoo(`${currency}=X`);
       rates[currency] = 1 / result.value;
     } catch {
       rates[currency] = null;
     }
-  }
+  }));
   return rates;
 }
 
-// --- Fetch all watchlist items ---
+// --- Fetch all watchlist items in parallel with 8s per-item timeout ---
 export async function fetchAllMarketData(watchlist) {
-  const results = {};
-  for (const item of watchlist) {
-    try {
-      if (item.source === 'FRED') {
-        results[item.id] = { ...await fetchFRED(item.symbol), name: item.name, type: item.type };
-      } else if (item.source === 'CoinGecko') {
-        results[item.id] = { ...await fetchCoinGecko(item.symbol), name: item.name, type: item.type };
-      } else if (item.source === 'Yahoo') {
-        results[item.id] = { ...await fetchYahoo(item.symbol), name: item.name, type: item.type };
-      }
-    } catch (e) {
-      results[item.id] = { name: item.name, error: e.message };
-    }
+  const TIMEOUT_MS = 8000;
+
+  function withTimeout(promise) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS))
+    ]);
   }
-  return results;
+
+  const entries = await Promise.all(
+    watchlist.map(async item => {
+      try {
+        let result;
+        if (item.source === 'FRED') {
+          result = await withTimeout(fetchFRED(item.symbol));
+        } else if (item.source === 'CoinGecko') {
+          result = await withTimeout(fetchCoinGecko(item.symbol));
+        } else if (item.source === 'Yahoo') {
+          result = await withTimeout(fetchYahoo(item.symbol));
+        } else {
+          return [item.id, { name: item.name, error: 'Unknown source' }];
+        }
+        return [item.id, { ...result, name: item.name, type: item.type }];
+      } catch (e) {
+        return [item.id, { name: item.name, type: item.type, error: e.message }];
+      }
+    })
+  );
+
+  return Object.fromEntries(entries);
 }
