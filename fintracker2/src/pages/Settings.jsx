@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api.js';
 import { getCategoryColor } from '../lib/format.js';
-import { randomUUID } from '../lib/uuid.js';
 
 const TABS = [
   { id: 'assets',     icon: 'ti-database',        label: 'Assets'     },
@@ -51,8 +50,7 @@ export default function Settings({ onRefresh }) {
 function SectionHeading({ title, children }) {
   return (
     <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-      {title}
-      {children}
+      {title}{children}
     </div>
   );
 }
@@ -65,78 +63,131 @@ function AddBtn({ onClick, label = 'Add' }) {
   );
 }
 
-function AssetsTab({ data, setData, onRefresh }) {
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', category: 'equity', currency: 'USD', institution: '', currentValue: '' });
-  const [saving, setSaving] = useState(false);
+function IconBtn({ icon, onClick, danger }) {
+  return (
+    <button onClick={onClick}
+      style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', flexShrink: 0 }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = danger ? 'var(--red-border)' : 'var(--border2)'; e.currentTarget.style.color = danger ? 'var(--red)' : 'var(--text)'; if (danger) e.currentTarget.style.background = 'var(--red-bg)'; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--muted)'; e.currentTarget.style.background = 'none'; }}>
+      <i className={`ti ${icon}`} style={{ fontSize: 14 }} aria-hidden="true" />
+    </button>
+  );
+}
 
-  async function addAsset() {
+function InlineForm({ fields, onSave, onCancel, saveLabel = 'Save', saving }) {
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+        {fields}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <button onClick={onCancel} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 500, cursor: 'pointer', color: 'var(--muted)' }}>Cancel</button>
+        <button onClick={onSave} disabled={saving} style={{ background: 'var(--text)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}>{saving ? 'Saving…' : saveLabel}</button>
+      </div>
+    </>
+  );
+}
+
+// ─── Assets Tab ───────────────────────────────────────────────────────────────
+
+function AssetsTab({ data, setData, onRefresh }) {
+  const [showAdd, setShowAdd]   = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm]         = useState({ name: '', category: 'equity', currency: 'USD', institution: '', currentValue: '' });
+  const [saving, setSaving]     = useState(false);
+
+  const EMPTY = { name: '', category: 'equity', currency: 'USD', institution: '', currentValue: '' };
+
+  function openAdd() { setForm(EMPTY); setEditingId(null); setShowAdd(true); }
+  function openEdit(asset) {
+    setForm({ name: asset.name, category: asset.category, currency: asset.currency, institution: asset.institution || '', currentValue: String(asset.currentValue) });
+    setEditingId(asset.id);
+    setShowAdd(false);
+  }
+  function closeForm() { setShowAdd(false); setEditingId(null); }
+
+  async function saveAsset() {
     if (!form.name || !form.currentValue) return;
     setSaving(true);
     try {
-      await api.addAsset({ ...form, currentValue: parseFloat(form.currentValue.replace(/,/g, '')) });
+      const payload = { ...form, currentValue: parseFloat(String(form.currentValue).replace(/,/g, '')) };
+      if (editingId) {
+        await api.editAsset(editingId, payload);
+      } else {
+        await api.addAsset(payload);
+      }
       const updated = await api.getPortfolio();
       setData(updated);
       onRefresh();
-      setShowForm(false);
-      setForm({ name: '', category: 'equity', currency: 'USD', institution: '', currentValue: '' });
+      closeForm();
     } finally { setSaving(false); }
   }
 
   async function deleteAsset(id) {
-    if (!confirm('Delete this asset?')) return;
+    if (!confirm('Delete this asset? This cannot be undone.')) return;
     await api.deleteAsset(id);
     const updated = await api.getPortfolio();
     setData(updated);
     onRefresh();
   }
 
+  const valueHint = form.currency ? `Enter the current value in ${form.currency}, numbers only. Example: ${form.currency === 'BRL' ? '772000' : form.currency === 'KRW' ? '23490000' : '184500'}` : 'Numbers only, no currency symbols or commas. Example: 184500';
+
+  function formFields(f, setF) {
+    return [
+      <Field key="name" label="Asset name"><input className="fi" value={f.name} onChange={e => setF(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Nasdaq ETF" /></Field>,
+      <Field key="cat" label="Category">
+        <select className="fi" value={f.category} onChange={e => setF(p => ({ ...p, category: e.target.value }))}>
+          {data.settings.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </Field>,
+      <Field key="cur" label="Native currency">
+        <select className="fi" value={f.currency} onChange={e => setF(p => ({ ...p, currency: e.target.value }))}>
+          {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </Field>,
+      <Field key="inst" label="Institution / notes"><input className="fi" value={f.institution} onChange={e => setF(p => ({ ...p, institution: e.target.value }))} placeholder="e.g. Fidelity" /></Field>,
+      <Field key="val" label={`Current value (${f.currency})`} hint={valueHint}>
+        <input className="fi" value={f.currentValue} onChange={e => setF(p => ({ ...p, currentValue: e.target.value }))} placeholder={f.currency === 'BRL' ? '772000' : f.currency === 'KRW' ? '23490000' : '184500'} />
+      </Field>
+    ];
+  }
+
   return (
     <div>
       <SectionHeading title="Asset registry">
-        <AddBtn onClick={() => setShowForm(v => !v)} label="Add asset" />
+        <AddBtn onClick={openAdd} label="Add asset" />
       </SectionHeading>
 
-      {showForm && (
+      {showAdd && (
         <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
-            <Field label="Asset name"><input className="fi" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Nasdaq ETF" /></Field>
-            <Field label="Category">
-              <select className="fi" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
-                {data.settings.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Native currency">
-              <select className="fi" value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}>
-                {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </Field>
-            <Field label="Institution / notes"><input className="fi" value={form.institution} onChange={e => setForm(f => ({ ...f, institution: e.target.value }))} placeholder="e.g. Fidelity" /></Field>
-            <Field label={`Current value (${form.currency})`}><input className="fi" value={form.currentValue} onChange={e => setForm(f => ({ ...f, currentValue: e.target.value }))} placeholder="0" /></Field>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button onClick={() => setShowForm(false)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 500, cursor: 'pointer', color: 'var(--muted)' }}>Cancel</button>
-            <button onClick={addAsset} disabled={saving} style={{ background: 'var(--text)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}>{saving ? 'Saving…' : 'Add asset'}</button>
-          </div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '.04em' }}>New asset</div>
+          <InlineForm fields={formFields(form, setForm)} onSave={saveAsset} onCancel={closeForm} saveLabel="Add asset" saving={saving} />
         </div>
       )}
 
       {data.assets.map(asset => {
         const catColor = getCategoryColor(asset.category, data.settings.categories);
-        const catName = data.settings.categories.find(c => c.id === asset.category)?.name || asset.category;
+        const catName  = data.settings.categories.find(c => c.id === asset.category)?.name || asset.category;
+        const isEditing = editingId === asset.id;
         return (
-          <div key={asset.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--border)' }}>
-            <i className="ti ti-grip-vertical" style={{ color: 'var(--muted2)', fontSize: 14, cursor: 'grab' }} aria-hidden="true" />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 500 }}>{asset.name}</div>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>{catName} · {asset.currency} · {asset.institution || 'Manual'}</div>
+          <div key={asset.id}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: isEditing ? 'none' : '1px solid var(--border)' }}>
+              <i className="ti ti-grip-vertical" style={{ color: 'var(--muted2)', fontSize: 14, cursor: 'grab' }} aria-hidden="true" />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>{asset.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>{catName} · {asset.currency} · {asset.institution || 'Manual'}</div>
+              </div>
+              <span style={{ background: catColor + '22', color: catColor, fontSize: 10, fontWeight: 500, padding: '2px 7px', borderRadius: 4, marginRight: 4 }}>{catName}</span>
+              <IconBtn icon="ti-edit"  onClick={() => isEditing ? closeForm() : openEdit(asset)} />
+              <IconBtn icon="ti-trash" onClick={() => deleteAsset(asset.id)} danger />
             </div>
-            <span style={{ background: catColor + '22', color: catColor, fontSize: 10, fontWeight: 500, padding: '2px 7px', borderRadius: 4, marginRight: 8 }}>{catName}</span>
-            <button onClick={() => deleteAsset(asset.id)} style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--red-border)'; e.currentTarget.style.color = 'var(--red)'; e.currentTarget.style.background = 'var(--red-bg)'; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--muted)'; e.currentTarget.style.background = 'none'; }}>
-              <i className="ti ti-trash" style={{ fontSize: 14 }} aria-hidden="true" />
-            </button>
+            {isEditing && (
+              <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', marginBottom: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--teal)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '.04em' }}>Editing: {asset.name}</div>
+                <InlineForm fields={formFields(form, setForm)} onSave={saveAsset} onCancel={closeForm} saveLabel="Save changes" saving={saving} />
+              </div>
+            )}
           </div>
         );
       })}
@@ -144,38 +195,81 @@ function AssetsTab({ data, setData, onRefresh }) {
   );
 }
 
+// ─── Categories Tab ───────────────────────────────────────────────────────────
+
 function CategoriesTab({ data, setData }) {
-  const [newName, setNewName] = useState('');
+  const [newName, setNewName]   = useState('');
   const [newColor, setNewColor] = useState('#2563eb');
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editColor, setEditColor] = useState('');
+
+  async function saveCategories(categories) {
+    await api.updateSettings({ ...data.settings, categories });
+    setData(d => ({ ...d, settings: { ...d.settings, categories } }));
+  }
 
   async function addCategory() {
     if (!newName.trim()) return;
-    const updated = { ...data.settings, categories: [...data.settings.categories, { id: newName.toLowerCase().replace(/\s+/g, '_'), name: newName, color: newColor }] };
-    await api.updateSettings(updated);
-    setData(d => ({ ...d, settings: updated }));
-    setNewName('');
+    const id = newName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    await saveCategories([...data.settings.categories, { id, name: newName.trim(), color: newColor }]);
+    setNewName(''); setNewColor('#2563eb');
+  }
+
+  function startEdit(cat) { setEditingId(cat.id); setEditName(cat.name); setEditColor(cat.color); }
+  function cancelEdit()   { setEditingId(null); }
+
+  async function saveEdit() {
+    const updated = data.settings.categories.map(c => c.id === editingId ? { ...c, name: editName, color: editColor } : c);
+    await saveCategories(updated);
+    setEditingId(null);
+  }
+
+  async function deleteCategory(id) {
+    const inUse = data.assets?.some(a => a.category === id);
+    if (inUse) { alert('This category is used by one or more assets. Reassign those assets first.'); return; }
+    if (!confirm('Delete this category?')) return;
+    await saveCategories(data.settings.categories.filter(c => c.id !== id));
   }
 
   return (
     <div>
       <SectionHeading title="Categories" />
-      <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14, lineHeight: 1.6 }}>Categories group assets in the portfolio view. Each category gets a color used in charts and badges.</p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
-        {data.settings.categories.map(cat => (
-          <div key={cat.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500, border: '1px solid var(--border)', background: 'var(--surface2)' }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: cat.color, display: 'inline-block' }} />
-            {cat.name}
-          </div>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-        <Field label="New category name"><input className="fi" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Commodities" /></Field>
-        <Field label="Color"><input type="color" value={newColor} onChange={e => setNewColor(e.target.value)} style={{ width: 36, height: 36, border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', padding: 2 }} /></Field>
-        <button onClick={addCategory} style={{ background: 'var(--text)', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12, fontWeight: 500, cursor: 'pointer', marginBottom: 1 }}>Add</button>
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14, lineHeight: 1.6 }}>Categories group assets in the portfolio view. Each category gets a color used in charts and badges. You cannot delete a category that is currently assigned to assets.</p>
+
+      {data.settings.categories.map(cat => (
+        <div key={cat.id} style={{ borderBottom: '1px solid var(--border)' }}>
+          {editingId === cat.id ? (
+            <div style={{ padding: '10px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input type="color" value={editColor} onChange={e => setEditColor(e.target.value)} style={{ width: 32, height: 32, border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', padding: 2, flexShrink: 0 }} />
+              <input className="fi" value={editName} onChange={e => setEditName(e.target.value)} style={{ flex: 1 }} />
+              <button onClick={saveEdit}   style={{ background: 'var(--text)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 12px', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}>Save</button>
+              <button onClick={cancelEdit} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 12px', fontSize: 12, cursor: 'pointer', color: 'var(--muted)' }}>Cancel</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0' }}>
+              <span style={{ width: 14, height: 14, borderRadius: 3, background: cat.color, display: 'inline-block', flexShrink: 0 }} />
+              <span style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{cat.name}</span>
+              <IconBtn icon="ti-edit"  onClick={() => startEdit(cat)} />
+              <IconBtn icon="ti-trash" onClick={() => deleteCategory(cat.id)} danger />
+            </div>
+          )}
+        </div>
+      ))}
+
+      <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 10 }}>Add new category</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <Field label="Name"><input className="fi" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Commodities" onKeyDown={e => e.key === 'Enter' && addCategory()} /></Field>
+          <Field label="Color"><input type="color" value={newColor} onChange={e => setNewColor(e.target.value)} style={{ width: 36, height: 36, border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', padding: 2 }} /></Field>
+          <button onClick={addCategory} style={{ background: 'var(--text)', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12, fontWeight: 500, cursor: 'pointer', marginBottom: 1 }}>Add</button>
+        </div>
       </div>
     </div>
   );
 }
+
+// ─── Currency Tab ─────────────────────────────────────────────────────────────
 
 function CurrencyTab({ data }) {
   const nonUSD = data.assets.filter(a => a.currency !== 'USD').map(a => a.currency);
@@ -195,7 +289,7 @@ function CurrencyTab({ data }) {
         <>
           <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 8 }}>Active exchange rates</div>
           {uniqueCurrencies.map(currency => {
-            const rate = data.fxRates?.[currency];
+            const rate  = data.fxRates?.[currency];
             const usedBy = data.assets.filter(a => a.currency === currency).map(a => a.name).join(', ');
             return (
               <div key={currency} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
@@ -215,8 +309,10 @@ function CurrencyTab({ data }) {
   );
 }
 
+// ─── Watchlist Tab ────────────────────────────────────────────────────────────
+
 function WatchlistTab({ data, setData }) {
-  const [form, setForm] = useState({ name: '', source: 'Yahoo', symbol: '', type: 'index' });
+  const [form, setForm]         = useState({ name: '', source: 'Yahoo', symbol: '', type: 'index' });
   const [showForm, setShowForm] = useState(false);
 
   async function addItem() {
@@ -271,22 +367,21 @@ function WatchlistTab({ data, setData }) {
             <div style={{ fontSize: 13, fontWeight: 500 }}>{item.name}</div>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>{item.source} · {item.symbol} · {item.type}</div>
           </div>
-          <button onClick={() => removeItem(item.id)} style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--red-border)'; e.currentTarget.style.color = 'var(--red)'; e.currentTarget.style.background = 'var(--red-bg)'; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--muted)'; e.currentTarget.style.background = 'none'; }}>
-            <i className="ti ti-trash" style={{ fontSize: 14 }} aria-hidden="true" />
-          </button>
+          <IconBtn icon="ti-trash" onClick={() => removeItem(item.id)} danger />
         </div>
       ))}
     </div>
   );
 }
 
-function Field({ label, children }) {
+// ─── Shared components ────────────────────────────────────────────────────────
+
+function Field({ label, hint, children }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <label style={{ fontSize: 11, fontWeight: 500, color: 'var(--muted)', letterSpacing: '.02em' }}>{label}</label>
       {children}
+      {hint && <span style={{ fontSize: 10, color: 'var(--muted2)', lineHeight: 1.5 }}>{hint}</span>}
     </div>
   );
 }
