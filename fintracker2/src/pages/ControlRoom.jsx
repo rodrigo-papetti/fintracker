@@ -14,17 +14,19 @@ export default function ControlRoom() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [refreshError, setRefreshError] = useState(null);
 
   useEffect(() => { load(); }, []);
 
   async function load(refresh = false) {
     try {
-      if (refresh) setRefreshing(true);
+      if (refresh) { setRefreshing(true); setRefreshError(null); }
       else setLoading(true);
       const data = await api.getBriefing(refresh);
       setBriefing(data);
     } catch (e) {
-      setError(e.message);
+      if (refresh) setRefreshError(e.message);
+      else setError(e.message);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -74,14 +76,21 @@ export default function ControlRoom() {
                 </span>
               )}
             </span>
-            <button
-              onClick={() => load(true)}
-              disabled={refreshing}
-              style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: 6, padding: '4px 10px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
-            >
-              <i className={`ti ti-refresh ${refreshing ? 'spin' : ''}`} style={{ fontSize: 12 }} aria-hidden="true" />
-              {refreshing ? 'Generating…' : 'Refresh'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {refreshError && (
+                <span style={{ fontSize: 11, color: 'var(--red)', maxWidth: 200, lineHeight: 1.4 }}>
+                  {refreshError}
+                </span>
+              )}
+              <button
+                onClick={() => load(true)}
+                disabled={refreshing}
+                style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: 6, padding: '4px 10px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <i className={`ti ti-refresh ${refreshing ? 'spin' : ''}`} style={{ fontSize: 12 }} aria-hidden="true" />
+                {refreshing ? 'Generating…' : 'Refresh'}
+              </button>
+            </div>
           </div>
           <div className="pb">
             {briefing?.signals?.length ? briefing.signals.map((sig, i) => {

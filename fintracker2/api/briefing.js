@@ -11,9 +11,9 @@ export default async function handler(req, res) {
     const today = new Date().toISOString().split('T')[0];
     const refresh = req.query.refresh === '1';
 
-    // Return cached briefing if generated today and no refresh requested
+    // Return cached briefing if generated today, has signals, and no refresh requested
     const { data: cache } = await db.from('briefing_cache').select('*').eq('id', 1).single();
-    if (!refresh && cache?.data && cache.generated_at?.startsWith(today)) {
+    if (!refresh && cache?.data?.signals?.length && cache.generated_at?.startsWith(today)) {
       return res.json(cache.data);
     }
 
@@ -109,7 +109,7 @@ Rules: 3-4 signals maximum. Every signal must reference a pinned indicator. Ques
 
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 1500,
       messages: [{ role: 'user', content: prompt }]
     });
