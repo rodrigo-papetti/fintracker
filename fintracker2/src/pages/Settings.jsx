@@ -523,15 +523,45 @@ function WatchlistTab({ data, setData }) {
         </div>
       )}
 
-      {/* Current watchlist */}
-      {data.settings.watchlist.map(item => (
-        <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--border)' }}>
+      {/* Current watchlist — drag to reorder, first 6 shown in Control Room */}
+      <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <i className="ti ti-grip-vertical" style={{ fontSize: 13 }} aria-hidden="true" />
+        Drag to reorder — first 6 appear in the Control Room top strip
+      </div>
+      {data.settings.watchlist.map((item, idx) => (
+        <div
+          key={item.id}
+          draggable
+          onDragStart={e => { e.dataTransfer.setData('text/plain', idx); e.currentTarget.style.opacity = '0.4'; }}
+          onDragEnd={e => { e.currentTarget.style.opacity = '1'; }}
+          onDragOver={e => { e.preventDefault(); e.currentTarget.style.background = 'var(--teal-bg)'; }}
+          onDragLeave={e => { e.currentTarget.style.background = ''; }}
+          onDrop={async e => {
+            e.preventDefault();
+            e.currentTarget.style.background = '';
+            const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+            const toIdx = idx;
+            if (fromIdx === toIdx) return;
+            const newList = [...data.settings.watchlist];
+            const [moved] = newList.splice(fromIdx, 1);
+            newList.splice(toIdx, 0, moved);
+            const updated = { ...data.settings, watchlist: newList };
+            await api.updateSettings(updated);
+            setData(d => ({ ...d, settings: updated }));
+          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--border)', cursor: 'grab', borderRadius: 4, transition: 'background .1s' }}
+        >
+          <i className="ti ti-grip-vertical" style={{ color: 'var(--muted2)', fontSize: 14, flexShrink: 0 }} aria-hidden="true" />
+          <div style={{ width: 20, height: 20, borderRadius: 4, background: idx < 6 ? 'var(--teal-bg)' : 'var(--bg)', border: `1px solid ${idx < 6 ? 'var(--teal-border)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, color: idx < 6 ? 'var(--teal)' : 'var(--muted2)', fontFamily: 'var(--font-mono)' }}>{idx + 1}</span>
+          </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 500 }}>{item.name}</div>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1, fontFamily: 'var(--font-mono)' }}>{item.symbol}</div>
           </div>
           <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 4, background: sourceBg[item.source] || 'var(--bg)', color: sourceColor[item.source] || 'var(--muted)' }}>{item.source}</span>
           <span style={{ fontSize: 11, color: 'var(--muted)', minWidth: 60 }}>{item.type}</span>
+          {idx < 6 && <span style={{ fontSize: 9, fontWeight: 600, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '.04em', minWidth: 32 }}>Pinned</span>}
           <IconBtn icon="ti-trash" onClick={() => removeItem(item.id)} danger />
         </div>
       ))}

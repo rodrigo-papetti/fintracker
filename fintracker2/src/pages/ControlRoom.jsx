@@ -35,8 +35,13 @@ export default function ControlRoom() {
   if (error) return <div style={{ padding: 20, color: 'var(--red)' }}>Error: {error}</div>;
 
   const mkt = briefing?.marketData || {};
+  const watchlist = briefing?.watchlist || [];
 
-  const mktItems = Object.values(mkt).filter(m => !m.error).slice(0, 6);
+  // Top 6 in watchlist order — matches what user pinned in Settings
+  const mktItems = watchlist
+    .slice(0, 6)
+    .map(w => mkt[w.id])
+    .filter(Boolean);
 
   return (
     <div>
@@ -83,11 +88,23 @@ export default function ControlRoom() {
               const s = TYPE_STYLE[sig.type] || TYPE_STYLE.neutral;
               return (
                 <div key={i} style={{ background: s.bg, border: `1px solid ${s.border}`, borderRadius: 8, padding: '14px 16px', marginBottom: i < briefing.signals.length - 1 ? 10 : 0 }}>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: s.tag, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>
-                    {s.label} {sig.asset ? `· ${sig.asset}` : ''}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: s.tag, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                      {s.label}{sig.asset ? ` · ${sig.asset}` : ''}
+                    </div>
+                    {sig.indicator && (
+                      <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'var(--font-mono)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 6px' }}>
+                        {sig.indicator}
+                      </div>
+                    )}
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{sig.title}</div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.65 }}>{sig.body}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{sig.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.65, marginBottom: sig.action ? 8 : 0 }}>{sig.body}</div>
+                  {sig.action && (
+                    <div style={{ fontSize: 12, color: s.tag, fontWeight: 500, borderTop: `1px solid ${s.border}`, paddingTop: 8, lineHeight: 1.5 }}>
+                      → {sig.action}
+                    </div>
+                  )}
                   {sig.source && <div style={{ fontSize: 10, color: 'var(--muted2)', marginTop: 8 }}>{sig.source} — {formatDate(briefing.date)}</div>}
                 </div>
               );
