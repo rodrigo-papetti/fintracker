@@ -4,6 +4,7 @@ import ControlRoom from './pages/ControlRoom.jsx';
 import Expenses from './pages/Expenses.jsx';
 import Settings from './pages/Settings.jsx';
 import UpdateSession from './components/UpdateSession.jsx';
+import Login from './components/Login.jsx';
 import './App.css';
 
 const NAV = [
@@ -12,7 +13,14 @@ const NAV = [
   { id: 'expenses',  icon: 'ti-receipt',     label: 'Expenses'      }
 ];
 
+const SESSION_KEY = 'ft_auth';
+
+function isAuthenticated() {
+  return sessionStorage.getItem(SESSION_KEY) === 'true';
+}
+
 export default function App() {
+  const [authed, setAuthed] = useState(isAuthenticated);
   const [screen, setScreen] = useState('portfolio');
   const [showUpdate, setShowUpdate] = useState(false);
   const [portfolioRefresh, setPortfolioRefresh] = useState(0);
@@ -21,6 +29,18 @@ export default function App() {
     setShowUpdate(false);
     setPortfolioRefresh(r => r + 1);
   }
+
+  function handleLogin() {
+    sessionStorage.setItem(SESSION_KEY, 'true');
+    setAuthed(true);
+  }
+
+  function handleLogout() {
+    sessionStorage.removeItem(SESSION_KEY);
+    setAuthed(false);
+  }
+
+  if (!authed) return <Login onLogin={handleLogin} />;
 
   return (
     <div className="app">
@@ -43,6 +63,14 @@ export default function App() {
           title="Settings"
         >
           <i className="ti ti-settings" aria-hidden="true" />
+        </button>
+        <button
+          className="nb"
+          onClick={handleLogout}
+          title="Lock"
+          style={{ marginTop: 8 }}
+        >
+          <i className="ti ti-lock" aria-hidden="true" />
         </button>
       </nav>
 
