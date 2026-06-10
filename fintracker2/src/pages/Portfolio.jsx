@@ -46,6 +46,9 @@ export default function Portfolio({ onOpenUpdate }) {
     color: getCategoryColor(cat, settings?.categories)
   })).sort((a, b) => b.value - a.value);
 
+  const brlRate = data.fxRates?.BRL ? 1 / data.fxRates.BRL : null;
+  const netWorthBRL = brlRate ? netWorth * brlRate : null;
+
   return (
     <div>
       {/* Metrics row */}
@@ -53,7 +56,12 @@ export default function Portfolio({ onOpenUpdate }) {
         <div className="mc">
           <div className="mc-label">Net worth</div>
           <div className="mc-val">{formatUSD(netWorth)}</div>
-          <div className="mc-sub" style={{ color: 'var(--muted)' }}>
+          {netWorthBRL && (
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 500, color: 'var(--muted)', marginTop: 2 }}>
+              R$ {formatNumber(Math.round(netWorthBRL))}
+            </div>
+          )}
+          <div className="mc-sub" style={{ color: 'var(--muted)', marginTop: 3 }}>
             {lastUpdated ? `Updated ${formatDate(lastUpdated)}${ds ? ` · ${ds}d ago` : ''}` : 'Not yet updated'}
           </div>
         </div>
@@ -64,6 +72,11 @@ export default function Portfolio({ onOpenUpdate }) {
               {settings?.categories?.find(c => c.id === seg.category)?.name || seg.category}
             </div>
             <div className="mc-val">{formatUSD(seg.value)}</div>
+            {netWorthBRL && (
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                R$ {formatNumber(Math.round(seg.value * brlRate))}
+              </div>
+            )}
             <div className="mc-sub">{seg.pct}% of portfolio</div>
           </div>
         ))}
