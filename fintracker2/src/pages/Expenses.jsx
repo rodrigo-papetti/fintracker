@@ -1,3 +1,4 @@
+// FinTracker Expenses v2.1 - CSV + PDF import
 import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { api } from '../lib/api.js';
