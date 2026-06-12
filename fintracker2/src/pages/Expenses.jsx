@@ -299,12 +299,31 @@ function UploadModal({ onClose, onDone }) {
     api.getInstitutionProfiles().then(p => { setProfiles(p); if (p.length) setProfileId(p[0].id); });
   }, []);
 
+  const selectedProfile = profiles.find(p => p.id === profileId);
+  const fileType = selectedProfile?.file_type || 'csv';
+  const accept = fileType === 'pdf' ? '.pdf' : '.csv,.txt';
+
   async function handleUpload() {
     if (!file || !profileId) return;
     setUploading(true); setError(null);
     try {
-      const text = await file.text();
-      const summary = await api.uploadCSV(text, profileId);
+      let fileContent, detectedType;
+
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        // Read as base64 for PDF
+        detectedType = 'pdf';
+        fileContent = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(',')[1]); // strip data:...;base64,
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      } else {
+        detectedType = 'csv';
+        fileContent = await file.text();
+      }
+
+      const summary = await api.uploadCSV(fileContent, profileId, detectedType);
       setResult(summary);
     } catch (e) {
       setError(e.message);
@@ -316,8 +335,8 @@ function UploadModal({ onClose, onDone }) {
   return (
     <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 200, background: 'rgba(0,0,0,.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, width: 460, padding: '24px 28px', boxShadow: '0 20px 60px rgba(0,0,0,.1)' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Import CSV</div>
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 20 }}>Select your institution profile and upload a CSV export from your bank or credit card.</div>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Import statement</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 20 }}>Select your institution profile and upload a CSV or PDF export from your bank or credit card.</div>
 
         {profiles.length === 0 ? (
           <div style={{ background: 'var(--amber-bg)', border: '1px solid #f0d4a0', borderRadius: 8, padding: '12px 14px', fontSize: 12, color: 'var(--amber)', marginBottom: 16 }}>
@@ -327,15 +346,27 @@ function UploadModal({ onClose, onDone }) {
           <>
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 11, fontWeight: 500, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Institution profile</label>
-              <select className="fi" value={profileId} onChange={e => setProfileId(e.target.value)}>
-                {profiles.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type.replace('_', ' ')})</option>)}
+              <select className="fi" value={profileId} onChange={e => { setProfileId(e.target.value); setFile(null); }}>
+                {profiles.map(p => <option key={p.id} value={p.id}>{p.name} ({p.file_type?.toUpperCase() || 'CSV'})</option>)}
               </select>
             </div>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={{ fontSize: 11, fontWeight: 500, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>CSV file</label>
-              <input type="file" accept=".csv,.txt" onChange={e => setFile(e.target.files[0])}
-                style={{ fontSize: 12, color: 'var(--text)', width: '100%' }} />
+              <label style={{ fontSize: 11, fontWeight: 500, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>
+                {fileType === 'pdf' ? 'PDF statement' : 'CSV file'}
+              </label>
+              <input
+                key={profileId} // reset when profile changes
+                type="file"
+                accept={accept}
+                onChange={e => setFile(e.target.files[0])}
+                style={{ fontSize: 12, color: 'var(--text)', width: '100%' }}
+              />
+              {fileType === 'pdf' && (
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                  Text-based PDFs only. Scanned/image PDFs are not supported — use a PDF-to-CSV converter first.
+                </div>
+              )}
             </div>
           </>
         )}

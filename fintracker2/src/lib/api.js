@@ -34,5 +34,5 @@ export const api = {
   getExpensesByMonth:      (year, month)         => req(`/api/expenses?year=${year}&month=${month}`),
   updateExpense:           (id, data)            => req(`/api/expenses?id=${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteExpense:           (id)                  => req(`/api/expenses?id=${id}`, { method: 'DELETE' }),
-  uploadCSV:               (csvContent, profileId) => req('/api/expenses-upload', { method: 'POST', body: JSON.stringify({ csvContent, profileId }) }),
+  uploadCSV: (fileContent, profileId, fileType = 'csv') => req('/api/expenses-upload', { method: 'POST', body: JSON.stringify({ fileContent, profileId, fileType }) }),
 };

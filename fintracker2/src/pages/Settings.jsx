@@ -667,7 +667,7 @@ function InstitutionsTab() {
   const [loading, setLoading]   = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId]     = useState(null);
-  const EMPTY = { name: '', type: 'credit_card', currency: 'USD', date_column: 0, description_column: 1, amount_column: 2, expense_is_positive: true, skip_rows: 1, exclude_keywords: 'TRANSFER,ATM,WITHDRAWAL,PAYMENT' };
+  const EMPTY = { name: '', type: 'credit_card', file_type: 'csv', currency: 'USD', date_column: 0, description_column: 1, amount_column: 2, expense_is_positive: true, skip_rows: 1, exclude_keywords: 'TRANSFER,ATM,WITHDRAWAL,PAYMENT' };
   const [form, setForm]         = useState(EMPTY);
   const [saving, setSaving]     = useState(false);
 
@@ -730,11 +730,18 @@ function InstitutionsTab() {
                 {PROFILE_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
               </select>
             </Field>
+            <Field label="File format" hint="CSV = column mapping required. PDF = Claude reads the statement directly.">
+              <select className="fi" value={form.file_type} onChange={e => setForm(f => ({ ...f, file_type: e.target.value }))}>
+                <option value="csv">CSV</option>
+                <option value="pdf">PDF</option>
+              </select>
+            </Field>
             <Field label="Currency">
               <select className="fi" value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}>
                 {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </Field>
+            {form.file_type === 'csv' && (<>
             <Field label="Header rows to skip" hint="Usually 1 (skip the column header row)">
               <input className="fi" type="number" min="0" value={form.skip_rows} onChange={e => setForm(f => ({ ...f, skip_rows: e.target.value }))} />
             </Field>
@@ -747,6 +754,7 @@ function InstitutionsTab() {
                 <option value="false">Negative = expense (e.g. some bank statements)</option>
               </select>
             </Field>
+            </>)}
             <Field label="Exclude keywords" hint="Comma-separated. Rows containing these are skipped." style={{ gridColumn: '1 / -1' }}>
               <input className="fi" value={form.exclude_keywords} onChange={e => setForm(f => ({ ...f, exclude_keywords: e.target.value }))} placeholder="TRANSFER,ATM,WITHDRAWAL,PAYMENT" />
             </Field>

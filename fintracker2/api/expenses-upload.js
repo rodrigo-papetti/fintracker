@@ -9,9 +9,10 @@ export default async function handler(req, res) {
 
   try {
     const db = supabaseAdmin();
-    const { csvContent, profileId } = req.body;
+    const { fileContent, fileType, profileId } = req.body;
+    // fileContent: base64 for PDF, raw text for CSV
+    // fileType: 'csv' | 'pdf'
 
-    // Load institution profile
     const { data: profile, error: profileErr } = await db
       .from('institution_profiles')
       .select('*')
@@ -19,13 +20,11 @@ export default async function handler(req, res) {
       .single();
     if (profileErr || !profile) throw new Error('Institution profile not found');
 
-    // Load expense categories
     const { data: categories } = await db
       .from('expense_categories')
       .select('*')
       .order('sort_order');
 
-    // Load confidence threshold
     const { data: settings } = await db
       .from('settings')
       .select('expense_confidence_threshold')
@@ -33,50 +32,183 @@ export default async function handler(req, res) {
       .single();
     const threshold = settings?.expense_confidence_threshold ?? 0.75;
 
-    // Parse CSV rows
-    const lines = csvContent.split('\n').map(l => l.trim()).filter(Boolean);
-    const dataLines = lines.slice(profile.skip_rows);
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const categoryList = categories.map(c => `- ${c.name} (id: ${c.id})`).join('\n');
 
-    // Parse each row using profile column mapping
-    const rows = dataLines.map((line, idx) => {
-      const cols = parseCSVLine(line);
-      const rawAmount = parseFloat((cols[profile.amount_column] || '0').replace(/[,$"]/g, ''));
-      const description = (cols[profile.description_column] || '').replace(/"/g, '').trim();
-      const date = (cols[profile.date_column] || '').replace(/"/g, '').trim();
+    let rows;
 
-      // Determine if expense based on sign convention
-      const isExpense = profile.expense_is_positive ? rawAmount > 0 : rawAmount < 0;
-      const amount = Math.abs(rawAmount);
-
-      // Check exclude keywords
-      const excludeKws = profile.exclude_keywords || [];
-      const shouldExclude = excludeKws.some(kw =>
-        description.toUpperCase().includes(kw.toUpperCase())
-      );
-
-      return { idx, date, description, amount, currency: profile.currency, isExpense, shouldExclude, raw: line };
-    }).filter(r => r.isExpense && !r.shouldExclude && r.amount > 0 && r.description);
-
-    if (rows.length === 0) {
-      return res.json({ imported: 0, message: 'No expense transactions found after filtering.' });
+    if (fileType === 'pdf') {
+      // ── PDF path: send to Claude as document, extract + categorize in one call ──
+      rows = await extractAndCategorizePDF({
+        anthropic, fileContent, profile, categories, categoryList, threshold
+      });
+    } else {
+      // ── CSV path: parse locally, then batch-categorize ──
+      rows = await parseCSVRows(fileContent, profile);
+      if (rows.length === 0) {
+        return res.json({ imported: 0, message: 'No expense transactions found after filtering.' });
+      }
+      rows = await categorizeRows({ anthropic, rows, profile, categoryList, threshold });
     }
 
-    // Fetch FX rates for currency conversion
+    if (rows.length === 0) {
+      return res.json({ imported: 0, message: 'No expense transactions found.' });
+    }
+
+    // FX conversion
     const currencies = [...new Set(rows.map(r => r.currency).filter(c => c !== 'USD'))];
     const fxRates = await fetchFXRates(currencies);
 
-    // Batch LLM categorization
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const expenseRecords = rows.map(row => {
+      const rate = row.currency === 'USD' ? 1 : (fxRates[row.currency] || 1);
+      const amountUsd = row.currency === 'USD' ? row.amount : row.amount * rate;
+      return {
+        date: row.date,
+        description: row.description,
+        merchant: row.merchant || row.description,
+        amount_original: row.amount,
+        currency_original: row.currency,
+        amount_usd: parseFloat(amountUsd.toFixed(2)),
+        category_id: row.status === 'categorized' ? row.category_id : null,
+        status: row.status,
+        confidence: row.confidence,
+        institution_profile_id: profileId
+      };
+    }).filter(r => r.date);
 
-    const categoryList = categories.map(c => `- ${c.name} (id: ${c.id})`).join('\n');
-    const transactionList = rows.map((r, i) =>
-      `${i}: date=${r.date} | description="${r.description}" | amount=${r.amount} ${r.currency}`
-    ).join('\n');
+    const { error: insertErr } = await db.from('expenses').insert(expenseRecords);
+    if (insertErr) throw insertErr;
 
-    const prompt = `You are categorizing personal finance transactions for a specific user.
+    res.json({
+      imported: expenseRecords.length,
+      categorized: expenseRecords.filter(r => r.status === 'categorized').length,
+      needs_review: expenseRecords.filter(r => r.status === 'needs_review').length,
+      uncategorized: expenseRecords.filter(r => r.status === 'uncategorized').length
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+// ── CSV: parse rows locally using column mapping ──────────────────────────────
+
+function parseCSVRows(csvContent, profile) {
+  const lines = csvContent.split('\n').map(l => l.trim()).filter(Boolean);
+  const dataLines = lines.slice(profile.skip_rows);
+  const excludeKws = profile.exclude_keywords || [];
+
+  return dataLines.map((line, idx) => {
+    const cols = parseCSVLine(line);
+    const rawAmount = parseFloat((cols[profile.amount_column] || '0').replace(/[,$"]/g, ''));
+    const description = (cols[profile.description_column] || '').replace(/"/g, '').trim();
+    const date = (cols[profile.date_column] || '').replace(/"/g, '').trim();
+    const isExpense = profile.expense_is_positive ? rawAmount > 0 : rawAmount < 0;
+    const amount = Math.abs(rawAmount);
+    const shouldExclude = excludeKws.some(kw => description.toUpperCase().includes(kw.toUpperCase()));
+    return { idx, date: parseDate(date), description, amount, currency: profile.currency, isExpense, shouldExclude };
+  }).filter(r => r.isExpense && !r.shouldExclude && r.amount > 0 && r.description && r.date);
+}
+
+// ── CSV: batch categorize parsed rows ────────────────────────────────────────
+
+async function categorizeRows({ anthropic, rows, profile, categoryList, threshold }) {
+  const transactionList = rows.map((r, i) =>
+    `${i}: date=${r.date} | description="${r.description}" | amount=${r.amount} ${r.currency}`
+  ).join('\n');
+
+  const prompt = buildCategorizationPrompt({ profile, categoryList, transactionList, fileType: 'csv' });
+
+  const message = await anthropic.messages.create({
+    model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5',
+    max_tokens: 4000,
+    messages: [{ role: 'user', content: prompt }]
+  });
+
+  const categorizations = JSON.parse(message.content[0].text.replace(/```json|```/g, '').trim());
+
+  return rows.map((row, i) => {
+    const cat = categorizations.find(c => c.index === i) || { category_id: null, confidence: 0, merchant: row.description };
+    const status = getStatus(cat, threshold);
+    return { ...row, ...cat, status };
+  });
+}
+
+// ── PDF: extract text via Claude document API, then extract + categorize ──────
+
+async function extractAndCategorizePDF({ anthropic, fileContent, profile, categories, categoryList, threshold }) {
+  const excludeList = (profile.exclude_keywords || []).join(', ') || 'none';
+
+  const prompt = `You are processing a bank or credit card statement PDF for a personal finance tracker.
 
 INSTITUTION: ${profile.name} (${profile.type})
-CSV FORMAT: date=col${profile.date_column}, description=col${profile.description_column}, amount=col${profile.amount_column}
+CURRENCY: ${profile.currency}
+EXCLUDE these transaction types (skip them entirely): transfers, ATM withdrawals, payments, credits, refunds, and any description containing: ${excludeList}
+
+AVAILABLE EXPENSE CATEGORIES:
+${categoryList}
+
+Your task:
+1. Find all expense/debit transactions in this statement
+2. For each transaction extract: date, description, amount
+3. Categorize each transaction and assign a confidence score
+
+Rules:
+- Only include actual spending transactions (no transfers, payments, credits, refunds, ATM)
+- Amount should always be a positive number
+- Date format: YYYY-MM-DD
+- Confidence: 1.0=certain, 0.8=likely, 0.6=reasonable, 0.4=uncertain, 0.2=unrecognizable
+- Clean merchant name: remove transaction IDs, reference numbers, noise
+
+Respond ONLY with a valid JSON array, no markdown, no preamble:
+[
+  {
+    "index": 0,
+    "date": "2026-05-15",
+    "description": "original description from statement",
+    "merchant": "Clean Merchant Name",
+    "amount": 45.90,
+    "category_id": "uuid-or-null",
+    "confidence": 0.95
+  },
+  ...
+]`;
+
+  const message = await anthropic.messages.create({
+    model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5',
+    max_tokens: 4000,
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: fileContent }
+        },
+        { type: 'text', text: prompt }
+      ]
+    }]
+  });
+
+  const extracted = JSON.parse(message.content[0].text.replace(/```json|```/g, '').trim());
+
+  return extracted.map(item => ({
+    date: item.date,
+    description: item.description,
+    merchant: item.merchant,
+    amount: item.amount,
+    currency: profile.currency,
+    category_id: item.category_id,
+    confidence: item.confidence,
+    status: getStatus(item, threshold)
+  })).filter(r => r.date && r.amount > 0);
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+function buildCategorizationPrompt({ profile, categoryList, transactionList, fileType }) {
+  return `You are categorizing personal finance transactions for a specific user.
+
+INSTITUTION: ${profile.name} (${profile.type})
+${fileType === 'csv' ? `CSV FORMAT: date=col${profile.date_column}, description=col${profile.description_column}, amount=col${profile.amount_column}` : ''}
 
 AVAILABLE CATEGORIES:
 ${categoryList}
@@ -84,91 +216,27 @@ ${categoryList}
 TRANSACTIONS TO CATEGORIZE (index: fields):
 ${transactionList}
 
-For each transaction, determine:
+For each transaction determine:
 1. The best matching category_id from the list above
-2. A confidence score from 0.0 to 1.0 where:
-   - 1.0 = absolutely certain (e.g. "NETFLIX" → Subscriptions)
-   - 0.8 = very likely (e.g. "UBER" → Transport)
-   - 0.6 = reasonable guess (e.g. "AMAZON" could be Shopping or Subscriptions)
-   - 0.4 = uncertain (e.g. generic merchant name)
-   - 0.2 = very uncertain or unrecognizable merchant
-3. A clean merchant name extracted from the description (remove transaction IDs, dates, noise)
+2. A confidence score 0.0–1.0: 1.0=certain, 0.8=likely, 0.6=reasonable guess, 0.4=uncertain, 0.2=unrecognizable
+3. A clean merchant name (remove transaction IDs, dates, noise)
 
 Rules:
-- Exclude any transfers, ATM withdrawals, payments, credits, or refunds — mark these with category_id: null and confidence: 0
-- If you cannot determine the category, set category_id: null and confidence: 0.2 or below
+- Mark transfers, ATM, payments, credits, refunds with category_id: null and confidence: 0
 - Be consistent: same merchant always gets same category
 
-Respond ONLY with a valid JSON array, no markdown, no preamble:
-[
-  {"index": 0, "category_id": "uuid-or-null", "confidence": 0.95, "merchant": "Clean Merchant Name"},
-  ...
-]`;
+Respond ONLY with a valid JSON array, no markdown:
+[{"index": 0, "category_id": "uuid-or-null", "confidence": 0.95, "merchant": "Name"}, ...]`;
+}
 
-    const message = await anthropic.messages.create({
-      model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5',
-      max_tokens: 4000,
-      messages: [{ role: 'user', content: prompt }]
-    });
-
-    let categorizations;
-    try {
-      categorizations = JSON.parse(message.content[0].text.replace(/```json|```/g, '').trim());
-    } catch {
-      throw new Error('Failed to parse LLM categorization response');
-    }
-
-    // Build expense records
-    const expenseRecords = rows.map((row, i) => {
-      const cat = categorizations.find(c => c.index === i) || { category_id: null, confidence: 0, merchant: row.description };
-      const rate = row.currency === 'USD' ? 1 : (fxRates[row.currency] || 1);
-      const amountUsd = row.currency === 'USD' ? row.amount : row.amount * rate;
-
-      let status = 'categorized';
-      if (!cat.category_id || cat.confidence === 0) {
-        status = 'uncategorized';
-      } else if (cat.confidence < threshold) {
-        status = 'needs_review';
-      }
-
-      // Parse date robustly
-      const parsedDate = parseDate(row.date);
-
-      return {
-        date: parsedDate,
-        description: row.description,
-        merchant: cat.merchant || row.description,
-        amount_original: row.amount,
-        currency_original: row.currency,
-        amount_usd: parseFloat(amountUsd.toFixed(2)),
-        category_id: status === 'categorized' ? cat.category_id : null,
-        status,
-        confidence: cat.confidence,
-        institution_profile_id: profileId
-      };
-    }).filter(r => r.date); // drop rows with unparseable dates
-
-    // Insert all records
-    const { error: insertErr } = await db.from('expenses').insert(expenseRecords);
-    if (insertErr) throw insertErr;
-
-    const summary = {
-      imported: expenseRecords.length,
-      categorized: expenseRecords.filter(r => r.status === 'categorized').length,
-      needs_review: expenseRecords.filter(r => r.status === 'needs_review').length,
-      uncategorized: expenseRecords.filter(r => r.status === 'uncategorized').length
-    };
-
-    res.json(summary);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+function getStatus(cat, threshold) {
+  if (!cat.category_id || cat.confidence === 0) return 'uncategorized';
+  if (cat.confidence < threshold) return 'needs_review';
+  return 'categorized';
 }
 
 function parseCSVLine(line) {
-  const cols = [];
-  let current = '';
-  let inQuotes = false;
+  const cols = []; let current = ''; let inQuotes = false;
   for (let i = 0; i < line.length; i++) {
     if (line[i] === '"') { inQuotes = !inQuotes; continue; }
     if (line[i] === ',' && !inQuotes) { cols.push(current); current = ''; continue; }
@@ -180,22 +248,12 @@ function parseCSVLine(line) {
 
 function parseDate(raw) {
   if (!raw) return null;
-  // Try common formats: MM/DD/YYYY, YYYY-MM-DD, DD/MM/YYYY, MM-DD-YYYY
   const cleaned = raw.trim().replace(/"/g, '');
-  const formats = [
-    /^(\d{4})-(\d{2})-(\d{2})$/, // YYYY-MM-DD
-    /^(\d{2})\/(\d{2})\/(\d{4})$/, // MM/DD/YYYY
-    /^(\d{2})-(\d{2})-(\d{4})$/, // MM-DD-YYYY
-  ];
-  for (const fmt of formats) {
+  const fmts = [/^(\d{4})-(\d{2})-(\d{2})$/, /^(\d{2})\/(\d{2})\/(\d{4})$/, /^(\d{2})-(\d{2})-(\d{4})$/];
+  for (const fmt of fmts) {
     const m = cleaned.match(fmt);
-    if (m) {
-      if (fmt.source.startsWith('^(\\d{4})')) return `${m[1]}-${m[2]}-${m[3]}`;
-      return `${m[3]}-${m[1]}-${m[2]}`;
-    }
+    if (m) return fmt.source.startsWith('^(\\d{4})') ? `${m[1]}-${m[2]}-${m[3]}` : `${m[3]}-${m[1]}-${m[2]}`;
   }
-  // Fallback: let JS parse it
   const d = new Date(cleaned);
-  if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
-  return null;
+  return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
 }
