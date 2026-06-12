@@ -87,7 +87,7 @@ export default function Expenses() {
           onClick={() => setShowUpload(true)}
           style={{ background: 'var(--text)', color: '#fff', border: 'none', borderRadius: 7, padding: '6px 14px', fontSize: 12, fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
         >
-          <i className="ti ti-upload" style={{ fontSize: 13 }} aria-hidden="true" /> Import CSV
+          <i className="ti ti-upload" style={{ fontSize: 13 }} aria-hidden="true" /> Import statement
         </button>
       </div>
 
@@ -408,9 +408,9 @@ function EmptyState({ onUpload }) {
         <i className="ti ti-receipt" style={{ fontSize: 22, color: 'var(--muted2)' }} aria-hidden="true" />
       </div>
       <div style={{ fontSize: 15, fontWeight: 600 }}>No expenses yet</div>
-      <div style={{ fontSize: 13, color: 'var(--muted)' }}>Import a CSV to get started. Configure institution profiles in Settings first.</div>
+      <div style={{ fontSize: 13, color: 'var(--muted)' }}>Import a CSV or PDF statement to get started. Configure institution profiles in Settings first.</div>
       <button onClick={onUpload} style={{ background: 'var(--text)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 20px', fontSize: 13, fontWeight: 500, cursor: 'pointer', marginTop: 4 }}>
-        Import CSV
+        Import statement
       </button>
     </div>
   );
